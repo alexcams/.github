@@ -12,32 +12,48 @@ jobs:
       pull-requests: write
     steps:
       - name: Post comment
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "### Changelog and Version Management
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner = context.payload.repository.owner.login;
+            const repo = context.payload.repository.name;
+            const prNumber = context.payload.pull_request.number;
 
-          Before merging, add a comment to this PR with the following format to automatically update the changelog and version:
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: prNumber, per_page: 100
+            });
+            const filenames = files.map(f => f.filename);
 
-          \`\`\`
-          /pr_prepare release:patch
-          - Your changelog entry here
-            - Subentry (optional)
-          \`\`\`
+            const hasChangelog = filenames.includes('CHANGELOG.md');
+            const hasVersion = filenames.includes('version') || filenames.includes('VERSION');
 
-          **Available commands:**
+            let body;
+            if (hasChangelog) {
+              if (hasVersion) {
+                core.info('PR already includes changelog and version changes, skipping comment');
+                return;
+              }
+              body = `### Changelog and Version Management
 
-          | Command | Description |
-          |---------|-------------|
-          | \`/pr_prepare changelog:add\` | Add changelog entry without version bump |
-          | \`/pr_prepare release:patch\` | Bump patch version and update changelog |
-          | \`/pr_prepare release:minor\` | Bump minor version and update changelog |
-          | \`/pr_prepare release:major\` | Bump major version and update changelog (only for PRs targeting \`main\`) |
+              This PR updates the changelog but does not update de plugin version. Please check if the current plugin version is already published on [RubyGems](https://rubygems.org/). If it is, a version bump is needed.`.replace(/^              /gm, '');
+            } else {
+              body = `### Changelog and Version Management
 
-          **Notes:**
-          - If no changelog entry is provided, the PR title will be used. Only alphanumeric characters, spaces, and common punctuation are allowed.
-          - If multiple \`/pr_prepare\` comments are added, the last one will be used.
-          - Changes are committed to the base branch after the PR is merged."
+              No changelog or version changes detected. You can either update them manually or use a comment command to update them automatically on merge:
+
+              \`/pr_prepare release:<patch|minor|major>\` — bump version + update changelog
+              \`/pr_prepare changelog:add\` — changelog entry only (no version bump)
+
+              \`\`\`
+              /pr_prepare release:patch
+              - Add the changelog entry here
+                - (Additional details can be provided in multiple lines, respecting markdown formatting)
+              \`\`\`
+
+              Omit the entry line to use the PR title. If multiple commands are posted, the last one wins.`.replace(/^              /gm, '');
+            }
+
+            await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
 
   prepare-pr:
     name: Update changelog and version
@@ -53,11 +69,21 @@ jobs:
         with:
           script: |
             const owner = context.payload.repository.owner.login;
+            const repo = context.payload.repository.name;
+            const prNumber = context.payload.pull_request.number;
+
+            // Skip if the PR already modified the changelog to avoid duplicate entries
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: prNumber, per_page: 100
+            });
+            if (files.some(f => f.filename === 'CHANGELOG.md')) {
+              core.info('PR already includes changelog changes, skipping automation');
+              core.setOutput('found', 'false');
+              return;
+            }
+
             const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo: context.payload.repository.name,
-              issue_number: context.payload.pull_request.number,
-              per_page: 100
+              owner, repo, issue_number: prNumber, per_page: 100
             });
 
             const prPrepareComments = comments.filter(c => c.body.trim().startsWith('/pr_prepare'));
