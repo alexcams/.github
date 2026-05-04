@@ -86,7 +86,14 @@ jobs:
               owner, repo, issue_number: prNumber, per_page: 100
             });
 
-            const prPrepareComments = comments.filter(c => c.body.trim().startsWith('/pr_prepare'));
+            const allowedAssociations = ['COLLABORATOR', 'MEMBER', 'OWNER'];
+            const prAuthor = context.payload.pull_request.user.login;
+
+            const prPrepareComments = comments.filter(c =>
+              c.body.trim().startsWith('/pr_prepare') &&
+              (allowedAssociations.includes(c.author_association) || c.user.login === prAuthor)
+            );
+            
             if (prPrepareComments.length === 0) {
               core.info('No /pr_prepare comment found, skipping');
               core.setOutput('found', 'false');
